@@ -1,122 +1,132 @@
+# CSV_to_DB.py - Upload CSV data to PostgreSQL
 import os
-from airflow import DAG
-from datetime import datetime
-from google.cloud import storage
-from dotenv import load_dotenv
 from sqlalchemy import text
 import subprocess
-
 from src.db_connection import *
 
-# Load environment variables from a .env file
-load_dotenv()
-
-# Function to create a table for storing user review data if it doesn’t exist
+# Function to create table for user reviews
+# Function to create table for user reviews
 def create_table_user_review():
-    # Fetch the connection string for PostgreSQL from environment variables
-    postgres_conn_string = os.getenv("postgres_conn_string")
-    # Establish connection to the PostgreSQL database
+    """Creates the user_reviews table in PostgreSQL."""
     engine = connect_with_db()
     with engine.begin() as connection:
         try:
-            # Define SQL query to create the 'user_reviews' table with necessary columns
-            query = text("""CREATE TABLE IF NOT EXISTS user_reviews (
-                            rating TEXT, 
-                            title TEXT, 
-                            text TEXT, 
-                            images TEXT, 
-                            asin TEXT, 
-                            parent_asin TEXT, 
-                            user_id TEXT, 
-                            timestamp TEXT, 
-                            helpful_vote TEXT, 
-                            verified_purchase TEXT
-                            ); """)
-            # Execute the query to create the table
-            result = connection.execute(query)
+            query = text("""
+                CREATE TABLE IF NOT EXISTS user_reviews (
+                    rating FLOAT,
+                    title TEXT,
+                    text TEXT,
+                    images TEXT,
+                    asin TEXT,
+                    parent_asin TEXT,
+                    user_id TEXT,
+                    timestamp TIMESTAMP,
+                    helpful_vote INT,
+                    verified_purchase BOOLEAN
+                );
+            """)
+            connection.execute(query)
+            print("User Reviews table created successfully.")
         except Exception as e:
-            # Print error message if table creation fails
-            message = f"Error during insert: {e}"
+            print(f"Error creating user_reviews table: {e}")
 
-# Function to create a table for storing metadata if it doesn’t exist
+# Function to create table for metadata
 def create_table_meta_data():
-    # Fetch the connection string for PostgreSQL from environment variables
-    postgres_conn_string = os.getenv("postgres_conn_string")
-    # Establish connection to the PostgreSQL database
+    """Creates the metadata table in PostgreSQL."""
     engine = connect_with_db()
     with engine.begin() as connection:
         try:
-            # Define SQL query to create the 'metadata' table with necessary columns
-            query = text("""CREATE TABLE IF NOT EXISTS metadata (
-                            main_category TEXT, 
-                            title TEXT, 
-                            average_rating TEXT, 
-                            rating_number TEXT, 
-                            features TEXT, 
-                            description TEXT, 
-                            price TEXT, 
-                            images TEXT, 
-                            videos TEXT, 
-                            store TEXT, 
-                            categories TEXT, 
-                            details TEXT, 
-                            parent_asin TEXT, 
-                            bought_together TEXT, 
-                            subtitle TEXT, 
-                            author TEXT
-                            ); """)
-            # Execute the query to create the table
-            result = connection.execute(query)
+            query = text("""
+                CREATE TABLE IF NOT EXISTS metadata (
+                    main_category TEXT,
+                    title TEXT,
+                    average_rating FLOAT,
+                    rating_number INT,
+                    features TEXT,
+                    description TEXT,
+                    price TEXT,
+                    images TEXT,
+                    videos TEXT,
+                    store TEXT,
+                    categories TEXT,
+                    details TEXT,
+                    parent_asin TEXT,
+                    bought_together TEXT,
+                    subtitle TEXT,
+                    author TEXT
+                );
+            """)
+            connection.execute(query)
+            print("Metadata table created successfully.")
         except Exception as e:
-            # Print error message if table creation fails
-            message = f"Error during insert: {e}"
+            print(f"Error creating metadata table: {e}")
 
-# Function to upload metadata from a CSV file in GCS to the PostgreSQL 'metadata' table
+# Function to load metadata CSV into PostgreSQL
 def add_meta_data():
-    # Define the GCS bucket and file paths
-    bucket_name = "mlops_data_pipeline/Data/Raw_CSV/TEST"
-    file_name = 'test_metadata.csv'
-    # Fetch the PostgreSQL connection string from environment variables
-    postgres_conn_string = os.getenv("postgres_conn_string")
-    table_name = 'metadata'
-    # Define the gcloud command to import CSV data from GCS to PostgreSQL
-    transfer_command = f"""
-    yes | gcloud sql import csv data-wharehousing \
-    gs://{bucket_name}/{file_name} \
-    --project=dockdecoder \
-    --database=postgres \
-    --table={table_name}
-    """
-
+    """Uploads metadata CSV from local machine to PostgreSQL inside Docker."""
+    
+    # Define CSV file path
+    csv_path = "Data/CSV/TEST/test_metadata.csv"
+    
+    # Ensure the file exists before proceeding
+    if not os.path.exists(csv_path):
+        print(f"Error: CSV file {csv_path} not found!")
+        return
+    
+    # Copy CSV file into the PostgreSQL container
     try:
-        # Run the command and capture the output
-        result = subprocess.run(transfer_command, shell=True, check=True, capture_output=True, text=True)
-        print("Import successful:", result.stdout)
+        subprocess.run(["docker", "cp", csv_path, "ml_ops-postgres-1:/tmp/test_metadata.csv"], check=True)
+        print("CSV file copied to PostgreSQL container.")
     except subprocess.CalledProcessError as e:
-        # Print error message if import fails
-        print("Error during import:", e.stderr)
+        print(f"Error copying file: {e}")
+        return
+    
+    # Run the `\copy` command inside PostgreSQL
+    transfer_command = """
+    docker exec -i ml_ops-postgres-1 psql -U airflow -d airflow -c "
+    \\copy metadata FROM '/tmp/test_metadata.csv' DELIMITER ',' CSV HEADER;
+    "
+    """
+    
+    try:
+        subprocess.run(transfer_command, shell=True, check=True)
+        print("Metadata successfully inserted into PostgreSQL!")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during import: {e}")
 
-# Function to upload user review data from a CSV file in GCS to the PostgreSQL 'user_reviews' table
+
+# Function to load review CSV into PostgreSQL
+import os
+import subprocess
+
 def add_review_data():
-    # Define the GCS bucket and file paths
-    bucket_name = "mlops_data_pipeline/Data/Raw_CSV/TEST"
-    file_name = 'test_user_reviews.csv'
-    # Fetch the PostgreSQL connection string from environment variables
-    postgres_conn_string = os.getenv("postgres_conn_string")
-    table_name = 'user_reviews'
-    # Define the gcloud command to import CSV data from GCS to PostgreSQL
-    transfer_command = f"""
-    yes | gcloud sql import csv data-wharehousing \
-    gs://{bucket_name}/{file_name} \
-    --project=dockdecoder \
-    --database=postgres \
-    --table={table_name}
-    """
-
+    """Uploads user review data from CSV to PostgreSQL inside Docker."""
+    
+    # Define CSV file path
+    csv_path = "Data/CSV/TEST/test_user_review.csv"
+    
+    # Ensure the file exists before proceeding
+    if not os.path.exists(csv_path):
+        print(f"Error: CSV file {csv_path} not found!")
+        return
+    
+    # Copy CSV file into the PostgreSQL container
     try:
-        # Run the command and capture the output
-        result = subprocess.run(transfer_command, shell=True, check=True, capture_output=True, text=True)
-        print("Import successful:", result.stdout)
+        subprocess.run(["docker", "cp", csv_path, "ml_ops-postgres-1:/tmp/test_user_review.csv"], check=True)
+        print("CSV file copied to PostgreSQL container.")
     except subprocess.CalledProcessError as e:
-        # Print error message if import fails
-        print("Error during import:", e.stderr)
+        print(f"Error copying file: {e}")
+        return
+    
+    # Run the `\copy` command inside PostgreSQL
+    transfer_command = """
+    docker exec -i ml_ops-postgres-1 psql -U airflow -d airflow -c "
+    \\copy user_reviews FROM '/tmp/test_user_review.csv' DELIMITER ',' CSV HEADER;
+    "
+    """
+    
+    try:
+        subprocess.run(transfer_command, shell=True, check=True)
+        print("Data successfully inserted into PostgreSQL!")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during import: {e}")
