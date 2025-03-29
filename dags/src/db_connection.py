@@ -3,68 +3,45 @@ import pg8000
 import sqlalchemy
 import logging
 from dotenv import load_dotenv
-from google.cloud.sql.connector import Connector, IPTypes
 
-# Load environment variables from .env file
-load_dotenv()
+load_dotenv()  # Load variables from .env
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 
 def connect_with_db() -> sqlalchemy.engine.base.Engine:
     """
-    Establishes a connection to the PostgreSQL database.
-    Supports both Google Cloud SQL and local PostgreSQL instances.
-    
-    Returns:
-        sqlalchemy.engine.base.Engine: SQLAlchemy engine for database operations.
+    Connect to PostgreSQL. If USE_GCP_SQL is True, connect to Cloud SQL.
+    Otherwise, connect to local Docker Postgres.
     """
+    db_user = os.getenv("DB_USER", "airflow")
+    db_pass = os.getenv("DB_PASS", "airflow")
+    db_name = os.getenv("DB_NAME", "airflow")
+    db_host = os.getenv("DB_HOST", "postgres")
+    db_port = os.getenv("DB_PORT", "5432")
 
-    # Retrieve database credentials and connection details from environment variables
-    instance_connection_name = os.getenv("INSTANCE_CONNECTION_NAME")  # GCP Cloud SQL instance
-    db_user = os.getenv("DB_USER", "airflow")  # Default user
-    db_pass = os.getenv("DB_PASS", "airflow")  # Default password
-    db_name = os.getenv("DB_NAME", "airflow")  # Default DB name
-    db_host = os.getenv("DB_HOST", "postgres")  # Default PostgreSQL host (Docker container)
-    db_port = os.getenv("DB_PORT", "5432")  # Default PostgreSQL port
-    
-    use_gcp = os.getenv("USE_GCP_SQL")  # Flag to determine if using Google Cloud SQL
+    use_gcp = os.getenv("USE_GCP_SQL", "False").strip().lower() == "true"
 
     if use_gcp:
-        # If connecting to Google Cloud SQL
+        logging.info("Attempting to connect to Cloud SQL. (USE_GCP_SQL=True)")
+        from google.cloud.sql.connector import Connector, IPTypes
+        instance_connection_name = os.getenv("INSTANCE_CONNECTION_NAME")
         ip_type = IPTypes.PRIVATE if os.getenv("PRIVATE_IP") else IPTypes.PUBLIC
-        logging.info(f"Connecting to Cloud SQL instance {instance_connection_name} using {ip_type} IP...")
-
-        # Create Google Cloud SQL connector
         connector = Connector()
 
         def getconn() -> pg8000.dbapi.Connection:
-            try:
-                conn: pg8000.dbapi.Connection = connector.connect(
-                    instance_connection_name,  # Connection name for the GCP instance
-                    "pg8000",  # PostgreSQL driver
-                    user=db_user,
-                    password=db_pass,
-                    db=db_name,
-                    ip_type=ip_type,  # Public or private IP
-                )
-                logging.info("Successfully connected to Google Cloud SQL.")
-                return conn
-            except Exception as e:
-                logging.error(f"Cloud SQL connection failed: {e}")
-                raise
+            return connector.connect(
+                instance_connection_name,
+                "pg8000",
+                user=db_user,
+                password=db_pass,
+                db=db_name,
+                ip_type=ip_type,
+            )
 
-        # Create SQLAlchemy engine with the GCP connection
-        engine = sqlalchemy.create_engine(
-            "postgresql+pg8000://",  
-            creator=getconn,
-        )
-
+        engine = sqlalchemy.create_engine("postgresql+pg8000://", creator=getconn)
+        logging.info("Successfully connected to Cloud SQL.")
     else:
-        # If connecting to local PostgreSQL (Docker or standalone)
-        logging.info(f"Connecting to PostgreSQL at {db_host}:{db_port} with user {db_user}...")
-
+        logging.info(f"Connecting to local Postgres at {db_host}:{db_port}, DB={db_name} ...")
         try:
             db_url = f"postgresql+pg8000://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
             engine = sqlalchemy.create_engine(db_url)
@@ -73,13 +50,10 @@ def connect_with_db() -> sqlalchemy.engine.base.Engine:
             logging.error(f"Local PostgreSQL connection failed: {e}")
             raise
 
-    return engine  # Return the SQLAlchemy engine
+    return engine
 
 if __name__ == "__main__":
-    try:
-        engine = connect_with_db()
-        with engine.connect() as conn:
-            result = conn.execute(sqlalchemy.text("SELECT NOW();"))
-            print(f"Connected to DB! Current time: {result.scalar()}")
-    except Exception as e:
-        print(f"Database connection failed: {e}")
+    engine = connect_with_db()
+    with engine.connect() as conn:
+        result = conn.execute(sqlalchemy.text("SELECT NOW()"))
+        print(f"Connected to DB! Current time: {result.scalar()}")

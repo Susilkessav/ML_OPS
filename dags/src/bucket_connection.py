@@ -82,7 +82,6 @@ def download_blob(source_blob_name: str, destination_file_name: str):
         logging.error(f"Error downloading {source_blob_name}: {e}")
 
 
-
 def list_blobs():
     """
     Lists all files (blobs) in the connected GCS bucket.
